@@ -11,6 +11,24 @@ client = OpenAI(
 # Model currently loaded in LM Studio
 MODEL_NAME = "phi-3-mini-4k-instruct"
 
+compliance_categories = [
+    "legal issues",
+    "fraud",
+    "corruption",
+    "regulatory investigations",
+    "ESG controversies",
+    "safety incidents",
+    "data breaches",
+    "major product failures",
+    "financial misconduct",
+    "significant reputational crises"
+]
+
+categories_text = ", ".join(compliance_categories)
+
+minLength, maxLength = 50, 5000
+
+
 
 def analyze_text(text: str) -> tuple[str, str, str]:
     
@@ -34,12 +52,13 @@ Your task for the GIVEN TEXT:
 3. Write ONE short sentence explaining your decision.
 
 Classification rules:
-- **RELEVANT:** The text mainly discusses a specific company AND includes serious negative or risk-related topics such as legal issues, fraud, corruption, regulatory investigations, ESG controversies, safety incidents, data breaches, major product failures, financial misconduct, or significant reputational crises.
-- **IRRELEVANT:** The text focuses on marketing, product reviews, advertising, general information, or any content without concrete compliance or risk events.
+- **RELEVANT:** The text mainly discusses a specific company AND **includes serious negative or risk-related topics {categories_text}**
+- **IRRELEVANT:** The text focuses on marketing, product reviews, advertising, general information, or **any content without concrete compliance or risk events.** If none of the {categories_text} are mentioned, classify as **IRRELEVANT**.
 - If the text describes **resolved or historical compliance cases** framed positively (e.g., lessons learned, reforms, cooperation, ethical improvements), classify it as **Irrelevant**, unless it reports new investigations, penalties, or ongoing legal issues.
-- If **the text is very short or lacks meaningful information** (e.g., fewer than two sentences, or mostly headlines/keywords), classify as **Irrelevant**.
+- If **the text is shorter than {minLength} characters or longer than {maxLength} characters or mostly headlines/keywords, classify as **IRRELEVANT**.
 - If **no clear company is mentioned**, classify as **Irrelevant**.
 - If **a company is mentioned only briefly or as an example**, and is **not the main subject**, classify as **Irrelevant**.
+-**IRRELEVANT** if the text can not confidently be classified as relevant it gets classified as **IRRELEVANT**.
 
 Output format (MUST follow exactly):
 Company: <company name or None>
@@ -103,6 +122,35 @@ def load_articles(path: Path) -> list:
         return data
     raise ValueError("articles.json must contain a list or {'articles': [...]}.")
 
+def calculateMetrics(target, output) -> dict:
+    tp, fn, fp, tn = 0, 0, 0, 0
+    total = len(target)
+
+    for i in range(len(target)):
+        if target[i] == 1 and output[i] == 1:
+            tp += 1
+        elif target[i] == 1 and output[i] == 0:
+            fn += 1
+        elif target[i] == 0 and output[i] == 1:
+            fp += 1
+        elif target[i] == 0 and output[i] == 0:
+            tn += 1
+    
+    accuracy = (tp + tn) / total 
+    errorRate = (fp + fn) / total 
+    recall = tp / (tp + fn) 
+    specificity = tn / (tn + fp)
+    precision = tp / (tp + fp)
+
+    metrics = {
+        "accuracy": accuracy,
+        "errorRate": errorRate,
+        "recall": recall,
+        "specificity": specificity,
+        "precision": precision
+    }
+    return metrics
+
 
 def main():
     
@@ -122,6 +170,11 @@ def main():
 
     articles = load_articles(input_path)
     results = []
+    trueRelevancy = []
+    outputRelevancy = []
+
+    for a in articles:
+        trueRelevancy.append(a["r"])
 
     for idx, item in enumerate(articles):
         if isinstance(item, str):
@@ -137,19 +190,29 @@ def main():
             continue
 
         company, decision, reason = analyze_text(text)
+
+        relevancy = 0 if decision == "Irrelevant" else 1
+        outputRelevancy.append(relevancy)
+
         results.append({
             "id": article_id,
             "company": company,
             "decision": decision,
+            "relevancy": relevancy,
             "reason": reason,
         })
 
+
+
     with output_path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["id", "company", "decision", "reason"])
+        writer = csv.DictWriter(f, fieldnames=["id", "company", "decision", "reason", "relevancy"])
         writer.writeheader()
         writer.writerows(results)
 
     print(f"Done. Wrote {len(results)} rows to {output_path}")
+    print (f"Metric Scores: {calculateMetrics(trueRelevancy, outputRelevancy)}")
+
+
 
 
 if __name__ == "__main__":
